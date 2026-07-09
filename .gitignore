@@ -1,0 +1,24 @@
+# Compiled binaries (populated at deploy time from USB)
+bin/*
+!bin/.gitkeep
+
+# Bundled ROCm + llama.cpp shared libraries
+lib/*
+!lib/.gitkeep
+!lib/rocm_smi/
+
+# Model weights
+models/*
+!models/.gitkeep
+
+# Runtime output
+logs/
+results.csv
+llm_results.csv
+
+# Temp files from test scripts
+/tmp/diag_*
+
+# Python cache
+__pycache__/
+*.pyc
