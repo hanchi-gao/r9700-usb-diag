@@ -1,67 +1,119 @@
-# R9700 LLM 推論診斷工具 — 操作說明
+# R9700 USB 診斷工具 — 操作說明
 
-USB 隨身碟自帶版，目標機**零安裝**，插上就能跑。
+USB 隨身碟攜帶版。插到**目標機**後直接執行，不需要在目標機安裝 ROCm 或任何額外套件。
 
-## 需求
+## 目標機需求
 
-目標機（產線主板）只需要：
-- amdgpu kernel module 已載入（Ubuntu 24.04 / kernel 6.8+ 預設內建）
-- `/dev/kfd` 與 `/dev/dri/renderD*` 存在（amdgpu module 自動建立）
+- **kernel ≥ 6.11**（6.8 以下無法列舉 gfx1201 / PCI ID `1002:7551`）
+- `amdgpu` kernel module 已載入
+- `/dev/dri/renderD*` 存在（amdgpu module 自動建立）
+- LLM 測試額外需要 `/dev/kfd`
 
-USB 自帶 ROCm userspace 函式庫、`llama-cli`、`rocm-smi` 與測試模型，不需要在目標機安裝任何東西。
+## USB 目錄結構
+
+```
+r9700-usb-diag/
+├── bin/
+│   ├── vk_burn        # Vulkan compute GPU 燒機 binary（必要）
+│   └── llama-cli      # LLM 推論 binary（可選，llm_test.sh 才用）
+├── models/
+│   └── *.gguf         # 推論模型（可選，llm_test.sh 才用）
+├── diag/
+│   ├── gpu_burn_test.sh   # GPU Vulkan 燒機測試（主要工具）
+│   ├── llm_test.sh        # LLM 推論測試（可選）
+│   ├── test_single_gpu.sh # 單卡 LLM 推論（由 llm_test.sh 呼叫）
+│   └── setup_env.sh       # LLM 環境 pre-flight（由 llm_test.sh 呼叫）
+├── logs/              # 每次測試結果（自動建立）
+├── results.csv        # 累計測試紀錄（自動建立）
+└── config.sh          # 閾值設定
+```
 
 ## 使用方式
 
-```bash
-cd <USB 掛載點>/diag
+### GPU 燒機測試（主要，不需 ROCm）
 
-sudo bash run_all.sh              # 自動偵測所有 R9700,逐張測試
-sudo bash run_all.sh --gpu 0      # 只測 GPU index 0
-sudo bash run_all.sh --verbose    # 顯示模型推論輸出內容
-sudo bash run_all.sh --timeout 60 # 自訂單卡推論逾時秒數(預設 180)
+```bash
+cd <USB 掛載點>
+
+sudo bash diag/gpu_burn_test.sh --serial SN001
+sudo bash diag/gpu_burn_test.sh --serial SN001 --duration 300   # 指定秒數（預設 120s）
+sudo bash diag/gpu_burn_test.sh --serial SN001 --gpu 0          # 只測單張卡
 ```
+
+- 使用 `bin/vk_burn`（Vulkan compute）同時對所有 R9700 加壓
+- 溫度、功耗、VRAM 全部從 **sysfs hwmon** 讀取，不依賴 rocm-smi
+- 燒機前自動檢查 VRAM 容量（≥28GB）與 PCIe 鏈路速度（Gen5 x16）
+- 結束後掃描 dmesg 確認無 GPU reset / MES / ring timeout 錯誤
+
+### LLM 推論測試（可選）
+
+```bash
+sudo bash diag/llm_test.sh --serial SN001
+sudo bash diag/llm_test.sh --serial SN001 --gpu 0
+sudo bash diag/llm_test.sh --serial SN001 --timeout 240
+```
+
+需要 USB 上備有 `bin/llama-cli` 與 `models/*.gguf`。
 
 ## 結果判讀
 
-執行結束會印出彩色 SUMMARY:
+執行結束列印彩色 RESULT 區塊：
 
 ```
-GPU 0:  PASS
-Total: 1 cards | 1 PASS | 0 FAIL
+  GPU 0  [0000:01:00.0]  PASS
+           Max junc: 87°C  Max power: 298W  VRAM: 31GB  PCIe: 32.0 GT/s x16
+
+  Total: 4 GPU(s) | 4 PASS | 0 FAIL
 ```
 
-- 全部 `PASS` → exit code 0 → **此板測試通過**
-- 任一張 `FAIL (exit N)` → exit code 1 → **此板不合格**,N 的意義見下表
+- 全部 PASS → exit 0 → **此板通過**
+- 任一 FAIL → exit 1 → **此板不合格**，reason 欄說明原因
 
-詳細 log 在 `logs/<時間戳記>/`，含 `summary.log` 與每張卡的 `gpu<N>.log`。
+詳細 log：`logs/<時間戳記>/burn.log`，累計紀錄：`results.csv`。
 
 ## Exit Code 對照表
 
+### gpu_burn_test.sh
+
+| Code | 意義 |
+|------|------|
+| 0 | 全部 GPU PASS |
+| 1 | 至少一張 FAIL（VRAM 不足 / 過溫 / vk_burn crash / dmesg GPU error / pre-check 失敗） |
+
+### llm_test.sh / test_single_gpu.sh
+
 | Code | 來源 | 意義 |
 |------|------|------|
-| 0 | run_all.sh | 全部 PASS |
-| 1 | run_all.sh | 至少一張卡 FAIL |
-| 2 | run_all.sh | 找不到 R9700 GPU(檢查 PCIe 插槽 / amdgpu driver) |
-| 10 | run_all.sh | 環境未就緒(看 pre-flight 輸出找原因) |
-| 3 | test_single_gpu.sh | VRAM 不足(疑似 HBM 故障,正常應 ≥28GB) |
-| 1 | test_single_gpu.sh | 推論輸出異常 / 亂碼 / timeout |
+| 0 | llm_test.sh | 全部 GPU PASS |
+| 1 | llm_test.sh | 至少一張推論輸出異常（空輸出 / 亂碼 / timeout） |
+| 3 | test_single_gpu.sh | VRAM 不足（≥28GB 要求未達，可能 HBM 故障） |
 | 4 | test_single_gpu.sh | dmesg 偵測到 GPU kernel error |
+| 10 | llm_test.sh | 環境未就緒（llama-cli 或 model 不存在） |
+
+## 閾值設定（config.sh）
+
+| 參數 | 預設值 | 說明 |
+|------|-------|------|
+| `DURATION` | 120 | 燒機秒數 |
+| `VRAM_MIN_GB` | 28 | VRAM 最小值（GB） |
+| `TEMP_WARN_C` | 98 | Junction 溫度警告 |
+| `TEMP_FAIL_C` | 100 | Junction 溫度立即 FAIL |
+| `REPORT_INTERVAL` | 15 | 狀態列印間隔（秒） |
+| `VRAM_PCT` | 90 | Vulkan 填充 VRAM 百分比 |
 
 ## 常見問題
 
-**pre-flight 在 amdgpu / /dev/kfd 階段失敗**
-→ 目標機 kernel 沒有正確的 amdgpu 驅動或 R9700 沒插好。本工具假設目標機驅動正常；
-   若需要在目標機安裝/更新 ROCm,請用 `diag/install_rocm.sh`(需網路連線)。
+**GPU 未偵測到（No discrete GPU found）**
+→ 確認 PCIe 插槽正確、BIOS 沒有 SR-IOV 或 Above 4G Decoding 問題，以及 `amdgpu` module 已載入（`lsmod | grep amdgpu`）。
 
-**Found 0 GPU(s) to test**
-→ `rocm-smi --showproductname` 抓不到 R9700/gfx1201 字串,檢查 PCIe 插槽與 BIOS 設定。
+**VRAM 顯示不足（VRAM XGB < 28GB）**
+→ 可能 HBM 故障或 amdgpu 初始化不完全。重開機後重試；若持續發生換卡。
 
-## 給開發者:重新打包 USB
+**PCIe 非 Gen5 x16**
+→ 燒機仍會繼續（降為 WARN），但需確認主板 PCIe 插槽與 riser 連接。
 
-換新 build 的 `llama-cli` 或新版 ROCm 時,在已裝好 ROCm 的開發機上跑:
+**vk_burn 不存在**
+→ 在開發機上編譯 `src/vk_burn.cpp`（需 `libvulkan-dev` + `g++`），將 binary 複製到 `bin/vk_burn`。
 
-```bash
-bash diag/prepare_usb_libs.sh <USB 掛載點>
-```
-
-詳見 `CLAUDE.md`。
+**LLM 環境未就緒（exit 10）**
+→ 確認 `bin/llama-cli` 與 `models/*.gguf` 已放到 USB 對應目錄。
