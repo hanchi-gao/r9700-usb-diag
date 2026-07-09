@@ -2,6 +2,17 @@
 
 USB 隨身碟攜帶版。插到**目標機**後直接執行，不需要在目標機安裝 ROCm 或任何額外套件。
 
+## 製作 USB（開發機上執行一次）
+
+```bash
+git clone https://github.com/hanchi-gao/r9700-usb-diag
+cd r9700-usb-diag
+./build.sh          # 編譯 bin/vk_burn（需 libvulkan-dev + glslang-tools + g++）
+# 複製整個資料夾到 USB 隨身碟，或直接從這個目錄對目標機跑
+```
+
+`build.sh` 若缺少 build deps 會直接提示安裝指令。
+
 ## 目標機需求
 
 - **kernel ≥ 6.11**（6.8 以下無法列舉 gfx1201 / PCI ID `1002:7551`）

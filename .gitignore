@@ -1,11 +1,13 @@
-# Compiled binaries (populated at deploy time from USB)
+# Compiled binaries
 bin/*
 !bin/.gitkeep
 
-# Bundled ROCm + llama.cpp shared libraries
+# Compiled shader (built from src/vk_burn.comp by build.sh)
+src/*.spv
+
+# Bundled shared libraries (llama.cpp etc.)
 lib/*
 !lib/.gitkeep
-!lib/rocm_smi/
 
 # Model weights
 models/*

@@ -1,0 +1,37 @@
+#version 450
+
+// FMA-heavy compute shader for GPU burn-in.
+// Each invocation does sustained FMA on a large buffer to drive
+// junction/memory temperature and power draw.
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) buffer Buf {
+    float data[];
+};
+
+layout(push_constant) uniform Params {
+    uint buf_len;
+    uint iterations;
+};
+
+void main() {
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= buf_len) return;
+
+    float a = data[gid];
+    float b = a * 0.999f + 0.001f;
+    float c = b * 1.001f - 0.001f;
+
+    // Sustained FMA loop — keeps ALUs and memory bus busy.
+    for (uint i = 0; i < iterations; i++) {
+        a = fma(a, b, c);
+        b = fma(b, c, a);
+        c = fma(c, a, b);
+        a = fma(a, c, b);
+        b = fma(b, a, c);
+        c = fma(c, b, a);
+    }
+
+    data[gid] = a + b + c;
+}
