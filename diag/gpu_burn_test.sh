@@ -174,6 +174,7 @@ echo ""
 # ─── pre-checks ──────────────────────────────────────────────────────────────
 info "=== Pre-checks ==="
 declare -A PRE_FAIL
+PRE_FAIL_COUNT=0
 declare -A GPU_VRAM_GB
 declare -A GPU_PCIE
 
@@ -187,6 +188,7 @@ for i in "${!VK_INDICES[@]}"; do
   if [[ "${vgb}" -lt "${VRAM_MIN_GB}" ]]; then
     fail "GPU ${idx} [${bdf}] VRAM ${vgb}GB < ${VRAM_MIN_GB}GB — possible HBM fault"
     PRE_FAIL["${idx}"]="VRAM ${vgb}GB below minimum ${VRAM_MIN_GB}GB"
+    PRE_FAIL_COUNT=$(( PRE_FAIL_COUNT + 1 ))
   else
     pass "GPU ${idx} [${bdf}] VRAM ${vgb}GB"
   fi
@@ -203,7 +205,7 @@ for i in "${!VK_INDICES[@]}"; do
 done
 echo ""
 
-if [[ ${#PRE_FAIL[@]} -gt 0 ]]; then
+if [[ ${PRE_FAIL_COUNT} -gt 0 ]]; then
   fail "Pre-check failed — aborting"
   for i in "${!VK_INDICES[@]}"; do
     idx="${VK_INDICES[$i]}"
@@ -326,7 +328,7 @@ done
 info "Checking dmesg for GPU errors..."
 DMESG_ERRS="$(dmesg 2>/dev/null \
   | awk -v t="${BURN_START_UPTIME}" \
-      'match($0, /\[\s*([0-9]+)/, a) && a[1]+0 >= t' \
+      '{ if (match($0, /\[[ \t]*[0-9]+/)) { ts = substr($0, RSTART+1, RLENGTH-1); gsub(/[ \t]/, "", ts); if (ts+0 >= t) print } }' \
   | grep -E "amdgpu.*(reset|gpu fault)|ring.*timeout|GCVM_L2|MES.*fail" \
   | grep -Ev "optc|disable_crtc|REG_WAIT" \
   || true)"
