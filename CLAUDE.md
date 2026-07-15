@@ -221,6 +221,20 @@ fi
 
 ---
 
+## tty1 開機引導畫面（bash_profile.tty1）
+
+repo 根目錄的 `bash_profile.tty1` 是 tty1 登入時印出的操作指引畫面（標題 + 建議指令 + config/log 路徑），指向 `diag/run_all.sh`。
+
+**這個檔案不屬於 `/diag-toolkit`**，它要裝到 USB 系統本身的 `/home/asrock/.bash_profile`，不是 toolkit 資料夾裡面，所以複製整個 `r9700-usb-diag/` 資料夾到 USB **不會**自動裝好這個引導畫面，必須每支 USB 另外手動跑一次：
+
+```bash
+cp bash_profile.tty1 <USB 掛載點>/home/asrock/.bash_profile
+```
+
+跟 `fix_usb_kernel_amdgpu.sh` 那個 amdgpu-dkms 流程一樣，**每一支已經在產線上用的 USB 都要各自補裝一次**，不會因為改了 repo 就自動同步。以後如果推薦的測試指令或入口腳本變了（例如 `run_all.sh` 改名或換參數），要記得同步更新這支模板檔案，並重新複製到所有已存在的 USB。
+
+---
+
 ## 已知問題 / 限制
 
 - **Ubuntu 20.04 完全不支援 R9700** — kernel 5.4/5.15 沒有 gfx1201 amdgpu 支援,Docker 也繞不過去,必須 22.04.5+ 或 24.04

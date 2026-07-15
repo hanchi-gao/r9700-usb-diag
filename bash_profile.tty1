@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+#==============================================================================
+# bash_profile.tty1 — tty1 boot-time guide for the R9700 diagnostic USB
+#
+# This is NOT sourced automatically. It lives outside /diag-toolkit because
+# it belongs to the USB's OS image (the asrock user's shell profile), not to
+# the portable toolkit — so it has to be installed once per physical USB:
+#
+#   cp bash_profile.tty1 <USB root>/home/asrock/.bash_profile
+#
+# Once installed, logging into tty1 on that USB prints this guide pointing
+# at run_all.sh. Update this file (and re-copy it to every existing USB)
+# whenever the recommended entry point or command changes.
+#==============================================================================
+
+if [ "$(tty)" = "/dev/tty1" ]; then
+
+  CYAN='\033[0;36m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+  BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+
+  clear
+  echo -e "${CYAN}${BOLD}"
+  echo "  ╔══════════════════════════════════════════════════╗"
+  echo "  ║      R9700 GPU Factory Diagnostic Tool           ║"
+  echo "  ║      ASRock GPU Validation USB                   ║"
+  echo "  ╚══════════════════════════════════════════════════╝"
+  echo -e "${NC}"
+
+  echo -e "${BOLD}  Full Factory Test${NC}  ${DIM}(burn-in, then LLM inference)${NC}"
+  echo -e "      execute:  ${BOLD}/diag-toolkit/diag/run_all.sh --serial SN001${NC}"
+  echo ""
+
+  echo -e "  ${DIM}Use -h for available options.${NC}"
+  echo ""
+  echo -e "  ${YELLOW}Config  :${NC}  /diag-toolkit/config.sh"
+  echo -e "  ${YELLOW}Logs    :${NC}  /diag-toolkit/logs/"
+  echo -e "${DIM}  ──────────────────────────────────────────────────${NC}"
+  echo ""
+
+fi

@@ -13,6 +13,14 @@ cd r9700-usb-diag
 
 `build.sh` 若缺少 build deps 會直接提示安裝指令。
 
+**每一支實體 USB 都要另外裝一次的開機引導畫面：**
+
+```bash
+cp bash_profile.tty1 <USB 掛載點>/home/asrock/.bash_profile
+```
+
+這個檔案不屬於 `/diag-toolkit`（它是 USB 系統本身 `asrock` 使用者的 shell profile，不隨 toolkit 一起複製），所以**每支新 USB 都要手動裝一次**，裝好後 tty1 登入會自動印出操作指引，指向 `run_all.sh`。之後如果推薦的指令或流程改了，記得同步更新這支已經在用的 USB。
+
 ## 目標機需求
 
 - **kernel ≥ 6.11**（6.8 以下無法列舉 gfx1201 / PCI ID `1002:7551`）
