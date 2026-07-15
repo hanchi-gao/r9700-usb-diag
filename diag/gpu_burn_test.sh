@@ -115,6 +115,7 @@ fi
 
 # ─── GPU detection ───────────────────────────────────────────────────────────
 declare -a VK_INDICES=()
+declare -a GPU_NAMES=()
 declare -a GPU_BDFS=()
 declare -a HWMON_DIRS=()
 
@@ -129,6 +130,7 @@ while IFS=$'\t' read -r idx name dtype; do
   [[ "${dtype}" == "2" ]] || continue
   [[ -z "${SINGLE_GPU}" || "${idx}" == "${SINGLE_GPU}" ]] || continue
   VK_INDICES+=("${idx}")
+  GPU_NAMES+=("${name}")
 done < <("${VK_BURN}" --list 2>/dev/null || true)
 
 if [[ ${#VK_INDICES[@]} -eq 0 ]]; then
@@ -153,7 +155,7 @@ GPU_COUNT=${#VK_INDICES[@]}
 
 # ─── results.csv init ────────────────────────────────────────────────────────
 if [[ ! -f "${RESULTS_CSV}" ]]; then
-  echo "timestamp,serial,gpu_index,bdf,vram_gb,pcie_link,max_junc_c,max_power_w,result,fail_reason,log_dir" \
+  echo "timestamp,serial,gpu_index,gpu_name,bdf,vram_gb,pcie_link,max_junc_c,max_power_w,result,fail_reason,log_dir" \
     > "${RESULTS_CSV}"
 fi
 
@@ -181,6 +183,9 @@ declare -A GPU_PCIE
 for i in "${!VK_INDICES[@]}"; do
   idx="${VK_INDICES[$i]}"
   bdf="${GPU_BDFS[$i]}"
+  name="${GPU_NAMES[$i]:-unknown}"
+
+  info "GPU ${idx}: ${name}"
 
   # VRAM
   vgb=$(vram_total_gb "${bdf}")
@@ -210,10 +215,11 @@ if [[ ${PRE_FAIL_COUNT} -gt 0 ]]; then
   for i in "${!VK_INDICES[@]}"; do
     idx="${VK_INDICES[$i]}"
     bdf="${GPU_BDFS[$i]}"
+    name="${GPU_NAMES[$i]:-unknown}"
     vgb="${GPU_VRAM_GB[$idx]:-0}"
     reason="${PRE_FAIL[${idx}]:-}"
     [[ -n "${reason}" ]] && \
-      echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},${bdf},${vgb},${GPU_PCIE[$idx]:-?},0,0,FAIL,${reason},${LOG_DIR}" \
+      echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},\"${name}\",${bdf},${vgb},${GPU_PCIE[$idx]:-?},0,0,FAIL,${reason},${LOG_DIR}" \
         >> "${RESULTS_CSV}"
   done
   exit 1
@@ -358,6 +364,7 @@ PASS_COUNT=0; FAIL_COUNT=0
 for i in "${!VK_INDICES[@]}"; do
   idx="${VK_INDICES[$i]}"
   bdf="${GPU_BDFS[$i]}"
+  name="${GPU_NAMES[$i]:-unknown}"
   vgb="${GPU_VRAM_GB[$idx]:-?}"
   pcie="${GPU_PCIE[$idx]:-?}"
   max_j="${MAX_JUNC[$idx]:-0}"
@@ -365,17 +372,17 @@ for i in "${!VK_INDICES[@]}"; do
   reason="${FAIL_REASONS[${idx}]:-}"
 
   if [[ -n "${reason}" ]]; then
-    echo -e "  GPU ${idx}  [${bdf}]  ${RED}${BOLD}FAIL${NC}" | tee -a "${MAIN_LOG}"
+    echo -e "  GPU ${idx}  [${name}]  [${bdf}]  ${RED}${BOLD}FAIL${NC}" | tee -a "${MAIN_LOG}"
     echo -e "           Reason  : ${reason}"                  | tee -a "${MAIN_LOG}"
     echo -e "           Max temp: ${max_j}°C  Max power: ${max_p}W" | tee -a "${MAIN_LOG}"
-    echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},${bdf},${vgb},${pcie},${max_j},${max_p},FAIL,${reason},${LOG_DIR}" \
+    echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},\"${name}\",${bdf},${vgb},${pcie},${max_j},${max_p},FAIL,${reason},${LOG_DIR}" \
       >> "${RESULTS_CSV}"
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
   else
-    echo -e "  GPU ${idx}  [${bdf}]  ${GREEN}${BOLD}PASS${NC}" | tee -a "${MAIN_LOG}"
+    echo -e "  GPU ${idx}  [${name}]  [${bdf}]  ${GREEN}${BOLD}PASS${NC}" | tee -a "${MAIN_LOG}"
     echo -e "           Max junc: ${max_j}°C  Max power: ${max_p}W  VRAM: ${vgb}GB  PCIe: ${pcie}" \
       | tee -a "${MAIN_LOG}"
-    echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},${bdf},${vgb},${pcie},${max_j},${max_p},PASS,,${LOG_DIR}" \
+    echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},\"${name}\",${bdf},${vgb},${pcie},${max_j},${max_p},PASS,,${LOG_DIR}" \
       >> "${RESULTS_CSV}"
     PASS_COUNT=$(( PASS_COUNT + 1 ))
   fi
