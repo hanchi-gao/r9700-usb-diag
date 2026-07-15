@@ -160,7 +160,7 @@ if [[ ! -f "${RESULTS_CSV}" ]]; then
 fi
 
 # ─── banner ──────────────────────────────────────────────────────────────────
-clear
+[[ "${NO_CLEAR:-0}" -eq 1 ]] || clear
 echo -e "${CYAN}${BOLD}"
 echo "  +--------------------------------------------------+"
 echo "  |      R9700 GPU Factory Burn-in Test              |"

@@ -84,10 +84,11 @@ else
   echo "  Stage 2 : LLM inference (llm_test.sh)"
 fi
 echo ""
-sleep 1
 
 # ─── stage 1: burn-in ────────────────────────────────────────────────────────
-bash "${BURN_TEST}" "${BURN_ARGS[@]}"
+# NO_CLEAR keeps this banner (and stage 1's output) on screen instead of each
+# sub-script wiping it with its own `clear`.
+NO_CLEAR=1 bash "${BURN_TEST}" "${BURN_ARGS[@]}"
 BURN_EC=$?
 
 if [[ "${BURN_EC}" -ne 0 ]]; then
@@ -103,7 +104,7 @@ if [[ "${BURN_ONLY}" -eq 1 ]]; then
 fi
 
 # ─── stage 2: LLM inference ──────────────────────────────────────────────────
-bash "${LLM_TEST}" "${LLM_ARGS[@]}"
+NO_CLEAR=1 bash "${LLM_TEST}" "${LLM_ARGS[@]}"
 LLM_EC=$?
 
 echo ""
