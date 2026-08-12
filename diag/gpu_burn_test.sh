@@ -414,6 +414,14 @@ else
   echo -e "${NC}"
 fi
 
+if [[ -n "${SHARED_RESULTS_DIR:-}" ]]; then
+  if mkdir -p "${SHARED_RESULTS_DIR}" 2>/dev/null && cp -r "${LOG_DIR}" "${SHARED_RESULTS_DIR}/" 2>/dev/null; then
+    log "Copied results to shared folder: ${SHARED_RESULTS_DIR}/$(basename "${LOG_DIR}")"
+  else
+    log "WARNING: failed to copy results to shared folder ${SHARED_RESULTS_DIR}"
+  fi
+fi
+
 echo -e "${BOLD}  ── Result location ────────────────────────────────${NC}"
 echo -e "  Log  : ${CYAN}${LOG_DIR}${NC}"
 echo -e "${BOLD}  ──────────────────────────────────────────────────${NC}"

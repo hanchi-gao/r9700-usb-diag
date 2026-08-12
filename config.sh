@@ -35,3 +35,10 @@ MAX_NONPRINT_RATIO=5
 
 # Number of parallel llama-cli instances (keep at 1 unless you have spare RAM)
 N_PARALLEL=1
+
+# ── Shared results folder (optional) ──────────────────────────────────────────
+# If set, each run's LOG_DIR is also copied here after the test finishes.
+# Leave empty on plain USB deployments. Machines that share a common results
+# folder (e.g. the FAT32 ESP on a triple-boot SATA disk) should override this
+# in their local config.sh copy.
+SHARED_RESULTS_DIR=""

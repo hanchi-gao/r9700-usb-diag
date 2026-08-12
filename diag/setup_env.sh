@@ -40,7 +40,7 @@ else
 fi
 
 # --- 2. amdgpu kernel module (the only thing required on target machine) ------
-if lsmod 2>/dev/null | grep -q '^amdgpu'; then
+if grep -q '^amdgpu ' /proc/modules 2>/dev/null; then
   ok "amdgpu: kernel module loaded"
 else
   err "amdgpu: NOT loaded -- check R9700 PCIe seating and BIOS settings"
