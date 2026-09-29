@@ -129,8 +129,12 @@ fan_apply() {
   FAN_APPLIED+=("${hw}")   # registered first so a partial failure is still restored
   if [[ -w "${od}/fan_zero_rpm_enable" ]]; then
     FAN_ORIG_ZERO["${hw}"]="$(sed -n 2p "${od}/fan_zero_rpm_enable" 2>/dev/null)"
+    # Some cards (e.g. R9700) have no zero-RPM idle-stop feature at all and
+    # reject this write outright (dmesg: "Zero RPM setting not supported!").
+    # That's not a reason to give up on the fan curve itself — just note it
+    # and move on; there's nothing to disable on a card that lacks the feature.
     if ! { fan_write "${od}/fan_zero_rpm_enable" 0 && fan_write "${od}/fan_zero_rpm_enable" c; }; then
-      FAN_ERR="could not disable zero-RPM mode"; return 1
+      warn "GPU fan: could not disable zero-RPM mode (card may not support it) — continuing anyway"
     fi
   fi
   for i in "${!FAN_TEMP_POINTS[@]}"; do
