@@ -29,6 +29,7 @@ REPORT_INTERVAL=15    # status print interval (seconds)
 TEMP_FAIL_C=100       # junction temp — immediate FAIL
 TEMP_WARN_C=98        # junction temp — WARNING
 VRAM_MIN_GB=28        # minimum expected VRAM
+FAN_PCT=""            # fixed fan speed in percent; empty = automatic fan control
 
 [[ -f "${USB_ROOT}/config.sh" ]] && source "${USB_ROOT}/config.sh"
 
@@ -40,6 +41,8 @@ Usage: $(basename "$0") --serial SERIAL [OPTIONS]
 Options:
   --serial SERIAL     Unit serial number (required for records)
   --duration SECS     Burn duration in seconds (default: ${DURATION})
+  --fan PCT           Hold the GPU fan at PCT percent during the burn (needs root;
+                      default: automatic fan control). Restored to automatic afterwards.
   --gpu INDEX         Test a single GPU by Vulkan index
   --config FILE       Override config file (default: config.sh)
   -h, --help          Show this help
@@ -56,12 +59,18 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --serial)   SERIAL="$2";     shift 2 ;;
     --duration) DURATION="$2";   shift 2 ;;
+    --fan)      FAN_PCT="$2";    shift 2 ;;
     --gpu)      SINGLE_GPU="$2"; shift 2 ;;
     --config)   source "$2";     shift 2 ;;
     -h|--help)  usage ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+
+if [[ -n "${FAN_PCT}" ]] && ! [[ "${FAN_PCT}" =~ ^[0-9]+$ && "${FAN_PCT}" -le 100 ]]; then
+  echo "ERROR: --fan expects a whole number of percent, 0-100 (got '${FAN_PCT}')" >&2
+  exit 1
+fi
 
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG_DIR="${USB_ROOT}/logs/${TS}"
@@ -76,13 +85,92 @@ pass() { log "${GREEN}[PASS]${NC}  $*"; }
 fail() { log "${RED}[FAIL]${NC}  $*"; }
 
 # ─── sysfs helpers ───────────────────────────────────────────────────────────
-sysfs_val() { cat "$1" 2>/dev/null || echo "0"; }
+sysfs_val() { timeout 1 cat "$1" 2>/dev/null || echo "0"; }
 
 read_edge()  { echo $(( $(sysfs_val "$1/temp1_input") / 1000 )); }
 read_junc()  { echo $(( $(sysfs_val "$1/temp2_input") / 1000 )); }
 read_memt()  { echo $(( $(sysfs_val "$1/temp3_input") / 1000 )); }
 read_power() { echo $(( $(sysfs_val "$1/power1_average") / 1000000 )); }
 read_sclk()  { echo $(( $(sysfs_val "$1/freq1_input") / 1000000 )); }
+read_fan()   { sysfs_val "$1/fan1_input"; }
+
+# >>> fan-control
+# Optional fixed fan speed (--fan PCT). hwmon pwm1 manual control is rejected by
+# RDNA3/RDNA4 amdgpu ("manual fan speed control should be enabled first"); the
+# working interface is the OverDrive fan curve in gpu_od/fan_ctrl. A flat curve
+# (same % at every temperature point) with zero-RPM mode off holds the fan at
+# the requested speed. Not persistent: amdgpu drops it on reboot / driver reload.
+declare -a FAN_APPLIED=()
+FAN_ERR=""
+declare -A FAN_ORIG_ZERO=()
+FAN_TEMP_POINTS=(25 43 62 81 100)     # hotspot °C; OD range is 25-100
+
+fan_od_dir() { echo "$(readlink -f "$1/device" 2>/dev/null)/gpu_od/fan_ctrl"; }
+fan_write()  { { echo "$2" > "$1"; } 2>/dev/null; }
+
+# fan_apply HWMON PCT — returns 0 when applied and read back; else sets FAN_ERR and returns 1.
+# Must run in the current shell (not inside $(...)) so FAN_APPLIED / FAN_ORIG_ZERO persist.
+fan_apply() {
+  local hw="$1" pct="$2" od lo hi i bad
+  FAN_ERR=""
+  od="$(fan_od_dir "${hw}")"
+  if [[ ! -w "${od}/fan_curve" ]]; then
+    FAN_ERR="no writable OverDrive fan_curve (${od}) — needs root and an amdgpu driver exposing gpu_od"
+    return 1
+  fi
+
+  read -r lo hi < <(sed -n 's/^FAN_CURVE(fan speed): *\([0-9]*\)% *\([0-9]*\)%.*/\1 \2/p' "${od}/fan_curve")
+  lo="${lo:-0}"; hi="${hi:-100}"
+  if [[ "${pct}" -lt "${lo}" || "${pct}" -gt "${hi}" ]]; then
+    FAN_ERR="${pct}% is outside this card's supported fan range (${lo}-${hi}%)"
+    return 1
+  fi
+
+  FAN_APPLIED+=("${hw}")   # registered first so a partial failure is still restored
+  if [[ -w "${od}/fan_zero_rpm_enable" ]]; then
+    FAN_ORIG_ZERO["${hw}"]="$(sed -n 2p "${od}/fan_zero_rpm_enable" 2>/dev/null)"
+    if ! { fan_write "${od}/fan_zero_rpm_enable" 0 && fan_write "${od}/fan_zero_rpm_enable" c; }; then
+      FAN_ERR="could not disable zero-RPM mode"; return 1
+    fi
+  fi
+  for i in "${!FAN_TEMP_POINTS[@]}"; do
+    if ! fan_write "${od}/fan_curve" "${i} ${FAN_TEMP_POINTS[$i]} ${pct}"; then
+      FAN_ERR="driver rejected fan curve point ${i} (${FAN_TEMP_POINTS[$i]}°C ${pct}%)"; return 1
+    fi
+  done
+  fan_write "${od}/fan_curve" c || { FAN_ERR="driver rejected the fan curve commit"; return 1; }
+
+  bad=$(sed -n '2,6p' "${od}/fan_curve" | grep -vc " ${pct}%\$" || true)
+  if [[ "${bad}" -ne 0 ]]; then
+    FAN_ERR="fan curve read-back does not match the requested ${pct}%"
+    return 1
+  fi
+  return 0
+}
+
+fan_restore_one() {   # back to the card's automatic fan control
+  local hw="$1" od
+  od="$(fan_od_dir "${hw}")"
+  fan_write "${od}/fan_curve" r; fan_write "${od}/fan_curve" c
+  if [[ -n "${FAN_ORIG_ZERO[${hw}]:-}" && -w "${od}/fan_zero_rpm_enable" ]]; then
+    fan_write "${od}/fan_zero_rpm_enable" "${FAN_ORIG_ZERO[${hw}]}"
+    fan_write "${od}/fan_zero_rpm_enable" c
+  fi
+}
+
+fan_restore_all() {
+  local hw
+  for hw in "${FAN_APPLIED[@]:-}"; do
+    [[ -n "${hw}" ]] && fan_restore_one "${hw}"
+  done
+  FAN_APPLIED=()
+}
+# Backstop: never leave a card on a forced (possibly low) fan speed if this
+# script dies, is interrupted, or exits through any early-return path.
+trap fan_restore_all EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+# <<< fan-control
 
 read_vram() {  # read_vram BDF → "usedGB/totalGB"
   local bdf="$1"
@@ -170,6 +258,11 @@ info "Serial    : ${SERIAL}"
 info "GPUs      : ${GPU_COUNT}"
 info "Duration  : ${DURATION}s"
 info "Threshold : WARN ≥${TEMP_WARN_C}°C  FAIL ≥${TEMP_FAIL_C}°C (junction)"
+if [[ -n "${FAN_PCT}" ]]; then
+  info "Fan       : ${FAN_PCT}% fixed (restored to automatic afterwards)"
+else
+  info "Fan       : automatic"
+fi
 info "Log       : ${LOG_DIR}"
 echo ""
 
@@ -207,6 +300,24 @@ for i in "${!VK_INDICES[@]}"; do
   info "GPU ${idx} PCIe: ${pcie_str}"
   [[ "${pcie_speed}" != *"32.0"* ]] && warn "GPU ${idx} not PCIe Gen5 — check slot/riser"
   [[ "${pcie_width}"  != "16"   ]] && warn "GPU ${idx} link width x${pcie_width} (expected x16)"
+
+  # Fan speed (only when --fan / FAN_PCT was given). A test that was asked to
+  # run at a fixed fan speed but silently ran on automatic would be misleading,
+  # so failing to apply it fails the pre-check.
+  if [[ -n "${FAN_PCT}" ]]; then
+    if [[ -z "${HWMON_DIRS[$i]}" ]]; then
+      fan_err="no amdgpu hwmon found for this GPU"
+    else
+      fan_apply "${HWMON_DIRS[$i]}" "${FAN_PCT}" && fan_err="" || fan_err="${FAN_ERR}"
+    fi
+    if [[ -n "${fan_err}" ]]; then
+      fail "GPU ${idx} fan ${FAN_PCT}%: ${fan_err}"
+      PRE_FAIL["${idx}"]="${PRE_FAIL[${idx}]:+${PRE_FAIL[${idx}]}; }fan control: ${fan_err}"
+      PRE_FAIL_COUNT=$(( PRE_FAIL_COUNT + 1 ))
+    else
+      pass "GPU ${idx} fan set to ${FAN_PCT}% (OverDrive curve, read back OK)"
+    fi
+  fi
 done
 echo ""
 
@@ -223,6 +334,27 @@ if [[ ${PRE_FAIL_COUNT} -gt 0 ]]; then
         >> "${RESULTS_CSV}"
   done
   exit 1
+fi
+
+# ─── wait for clock sync (only if this machine has a network at all) ────────
+# A wrong RTC/system clock at boot (auto-run can fire before NTP corrects it)
+# would bake a bogus far-future DEADLINE below, and the loop's "elapsed"
+# check would then never trip until real time actually reaches that bogus
+# date — the test would appear to hang for months. Wait (bounded) for NTP
+# sync first so DEADLINE is computed from a trustworthy clock. Skip entirely
+# on network-less deployments — with no network the clock can't be corrected
+# mid-test anyway, so there's nothing to wait for and no bug to guard against.
+if ip route get 1.1.1.1 &>/dev/null; then
+  CLOCK_WAIT=0
+  while [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]]; do
+    if [[ ${CLOCK_WAIT} -ge 30 ]]; then
+      warn "System clock not confirmed synced after 30s — proceeding anyway"
+      break
+    fi
+    [[ ${CLOCK_WAIT} -eq 0 ]] && info "Waiting for system clock to sync (NTP)..."
+    sleep 1
+    CLOCK_WAIT=$(( CLOCK_WAIT + 1 ))
+  done
 fi
 
 # ─── launch vk_burn (all GPUs simultaneously) ────────────────────────────────
@@ -246,6 +378,7 @@ echo ""
 declare -A FAIL_REASONS
 declare -A MAX_JUNC
 declare -A MAX_POWER
+declare -A FAN_WARNED=()
 for idx in "${VK_INDICES[@]}"; do
   MAX_JUNC["${idx}"]=0
   MAX_POWER["${idx}"]=0
@@ -258,6 +391,8 @@ kill_gpu() {
   FAIL_REASONS["${idx}"]="${reason}"
   kill "${VK_PIDS[$pos]}" 2>/dev/null || true
   fail "GPU ${idx} → ${reason}"
+  # a card that just failed (e.g. over-temperature) must not keep a forced fan speed
+  [[ -n "${FAN_PCT}" && -n "${HWMON_DIRS[$pos]}" ]] && fan_restore_one "${HWMON_DIRS[$pos]}"
 }
 
 # ─── monitoring loop ─────────────────────────────────────────────────────────
@@ -285,6 +420,7 @@ while [[ $(date +%s) -lt ${DEADLINE} ]]; do
       memt=$(read_memt  "${hw}")
       pwr=$(read_power  "${hw}")
       sclk=$(read_sclk  "${hw}")
+      fan=$(read_fan    "${hw}")
       vram=$(read_vram  "${bdf}")
 
       [[ "${junc}"  -gt "${MAX_JUNC[$idx]}"  ]] && MAX_JUNC["${idx}"]="${junc}"
@@ -299,8 +435,15 @@ while [[ $(date +%s) -lt ${DEADLINE} ]]; do
         STATUS="${GREEN}OK${NC}"
       fi
 
-      printf "  GPU %-2s  edge:%3s°C  junc:%3s°C  mem:%3s°C  %4sW  %4sMHz  %-12s  " \
-        "${idx}" "${edge}" "${junc}" "${memt}" "${pwr}" "${sclk}" "${vram}" \
+      # a forced fan speed that isn't spinning the fan on a hot card = the setting
+      # is not taking effect on this card; say so once instead of failing silently
+      if [[ -n "${FAN_PCT}" && "${fan}" -eq 0 && "${junc}" -ge 60 && -z "${FAN_WARNED[${idx}]:-}" ]]; then
+        FAN_WARNED["${idx}"]=1
+        warn "GPU ${idx} fan reads 0 RPM at ${junc}°C with --fan ${FAN_PCT}% requested — fan control may not be taking effect on this card"
+      fi
+
+      printf "  GPU %-2s  edge:%3s°C  junc:%3s°C  mem:%3s°C  %4sW  %4sMHz  fan:%4sRPM  %-12s  " \
+        "${idx}" "${edge}" "${junc}" "${memt}" "${pwr}" "${sclk}" "${fan}" "${vram}" \
         | tee -a "${MAIN_LOG}"
       echo -e "${STATUS}" | tee -a "${MAIN_LOG}"
     done
@@ -327,6 +470,8 @@ for i in "${!VK_INDICES[@]}"; do
   [[ "${GPU_ACTIVE[${idx}]:-0}" -eq 1 ]] && \
     wait "${VK_PIDS[$i]}" 2>/dev/null || true
 done
+
+fan_restore_all   # burn is over — hand the fan back to the card
 
 # ─── dmesg check ─────────────────────────────────────────────────────────────
 # Only check errors logged AFTER burn-in started (skips boot-time display init warnings).

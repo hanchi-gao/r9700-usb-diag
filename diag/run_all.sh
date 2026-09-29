@@ -24,6 +24,7 @@ CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 
 SERIAL="${HOSTNAME:-unknown}"
 DURATION=""
+FAN=""
 TIMEOUT=""
 SINGLE_GPU=""
 CONFIG_FILE=""
@@ -39,6 +40,7 @@ If burn-in fails, the LLM inference stage is skipped.
 Options:
   --serial SERIAL     Unit serial number (required for records)
   --duration SECS     Burn-in duration, passed to gpu_burn_test.sh
+  --fan PCT           Hold the GPU fan at PCT percent during burn-in (needs root; default: automatic)
   --timeout SECS      LLM inference timeout, passed to llm_test.sh
   --gpu INDEX         Test a single GPU by index (both stages)
   --config FILE       Override config file (default: config.sh)
@@ -52,6 +54,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --serial)    SERIAL="$2";      shift 2 ;;
     --duration)  DURATION="$2";    shift 2 ;;
+    --fan)       FAN="$2";         shift 2 ;;
     --timeout)   TIMEOUT="$2";     shift 2 ;;
     --gpu)       SINGLE_GPU="$2";  shift 2 ;;
     --config)    CONFIG_FILE="$2"; shift 2 ;;
@@ -63,6 +66,7 @@ done
 
 BURN_ARGS=(--serial "${SERIAL}")
 [[ -n "${DURATION}"    ]] && BURN_ARGS+=(--duration "${DURATION}")
+[[ -n "${FAN}"         ]] && BURN_ARGS+=(--fan "${FAN}")
 [[ -n "${SINGLE_GPU}"  ]] && BURN_ARGS+=(--gpu "${SINGLE_GPU}")
 [[ -n "${CONFIG_FILE}" ]] && BURN_ARGS+=(--config "${CONFIG_FILE}")
 

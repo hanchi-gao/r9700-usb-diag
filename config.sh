@@ -20,6 +20,11 @@ DURATION=120
 # Vulkan VRAM fill percentage
 VRAM_PCT=90
 
+# Fixed GPU fan speed during burn-in, in percent (whole number; the card's own
+# limit applies, typically 20-100). Empty = leave the fan on automatic control.
+# Needs root. Restored to automatic when the burn ends. Overridden by --fan.
+FAN_PCT=""
+
 # ── LLM inference settings ────────────────────────────────────────────────────
 # Number of tokens to generate per inference run
 N_PREDICT=128

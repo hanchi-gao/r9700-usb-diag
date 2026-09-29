@@ -269,3 +269,4 @@ cp bash_profile.tty1 <USB 掛載點>/home/asrock/.bash_profile
 | `LLAMA_BIN` | run_all.sh → test_single_gpu.sh | llama-cli 路徑 |
 | `MODEL_PATH` | run_all.sh → test_single_gpu.sh | GGUF 模型路徑 |
 | `SHARED_RESULTS_DIR` | config.sh | 若設定，`gpu_burn_test.sh`/`llm_test.sh` 跑完會把當次 `LOG_DIR` 整包複製過去。預設空字串（不複製）。目前只有安裝在 Win10+Ubuntu18.04 SATA 碟三系統上的那台機器，在本機 `config.sh` 覆寫成 `/boot/efi/EFI/ubuntu/gpu_test_results`（該 ESP 上跟 Windows/Ubuntu18.04 共用的 `\EFI\ubuntu\` 資料夾底下的子資料夾，用來彙整測試數據），一般 USB 部署維持空字串即可。 |
+| `FAN_PCT` | config.sh / `--fan PCT` | 燒機期間把 GPU 風扇固定在指定百分比（整數，卡本身的範圍通常 20–100）。預設空字串 = 維持卡片自動控制。需 root。RDNA3/RDNA4 的 `hwmon pwm1` 手動控制會被驅動拒絕（dmesg: `manual fan speed control should be enabled first`），改走 OverDrive `gpu_od/fan_ctrl/fan_curve`：寫一條平的曲線（5 個溫度點都同一個 %）並關掉 zero-RPM。燒機結束、GPU 被判 FAIL（例如過溫）、腳本被中斷或異常結束時都會還原成自動（`trap EXIT`）；設定不會跨重開機保留。套用後會讀回曲線核對，套用失敗會讓 pre-check FAIL，不會默默用自動風扇繼續跑。狀態列多印 `fan:xxxxRPM`，若指定了風扇但接點溫度 ≥60°C 而風扇仍 0 RPM 會警告一次。 |

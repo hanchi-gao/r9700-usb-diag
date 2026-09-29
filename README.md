@@ -58,6 +58,7 @@ cd <USB 掛載點>
 sudo bash diag/run_all.sh --serial SN001
 sudo bash diag/run_all.sh --serial SN001 --duration 300 --timeout 240
 sudo bash diag/run_all.sh --serial SN001 --gpu 0
+sudo bash diag/run_all.sh --serial SN001 --fan 70      # 燒機期間風扇固定 70%（結束後自動還原）
 sudo bash diag/run_all.sh --serial SN001 --burn-only   # 只跑燒機，不跑 LLM
 ```
 
@@ -74,6 +75,7 @@ cd <USB 掛載點>
 sudo bash diag/gpu_burn_test.sh --serial SN001
 sudo bash diag/gpu_burn_test.sh --serial SN001 --duration 300   # 指定秒數（預設 120s）
 sudo bash diag/gpu_burn_test.sh --serial SN001 --gpu 0          # 只測單張卡
+sudo bash diag/gpu_burn_test.sh --serial SN001 --fan 70         # 風扇固定 70%（需 root；不填 = 自動控制）
 ```
 
 - 使用 `bin/vk_burn`（Vulkan compute）同時對所有 R9700 加壓
