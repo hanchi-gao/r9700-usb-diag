@@ -1,8 +1,15 @@
 // vk_burn.cpp — Vulkan compute GPU burn-in.
 // Fills VRAM to a target percentage with buffers and dispatches a sustained
-// FMA compute shader until a deadline. No ROCm or HIP needed.
+// FMA compute shader for a fixed duration. No ROCm or HIP needed.
 //
-// Usage: ./vk_burn <deadline_epoch> <vram_pct> [gpu_index]
+// Usage: ./vk_burn <duration_seconds> <vram_pct> [gpu_index]
+//
+// Duration is timed against CLOCK_MONOTONIC, not wall-clock time: a wall
+// clock (time(), CLOCK_REALTIME) can jump — e.g. an unsynced RTC getting
+// stepped by NTP mid-run — and a caller that computed an absolute deadline
+// from the wall clock before that jump would have this loop keep running
+// (or stop early) by however far the clock moved. CLOCK_MONOTONIC only
+// ever advances at the real elapsed rate, so it can't be fooled that way.
 //
 // Build: g++ -O2 -o vk_burn vk_burn.cpp -lvulkan
 // Shader: glslangValidator -V vk_burn.comp -o vk_burn.comp.spv
@@ -89,13 +96,22 @@ int main(int argc, char** argv) {
     }
 
     if (argc < 3) {
-        fprintf(stderr, "usage: %s <deadline_epoch> <vram_pct> [gpu_index]\n", argv[0]);
+        fprintf(stderr, "usage: %s <duration_seconds> <vram_pct> [gpu_index]\n", argv[0]);
         fprintf(stderr, "       %s --list\n", argv[0]);
         return 1;
     }
-    time_t deadline = (time_t)atoll(argv[1]);
+    long duration_sec = atol(argv[1]);
     int vram_pct = atoi(argv[2]);
     int gpu_idx = argc > 3 ? atoi(argv[3]) : 0;
+
+    struct timespec burn_start_ts;
+    clock_gettime(CLOCK_MONOTONIC, &burn_start_ts);
+    auto elapsed_sec = [&burn_start_ts]() -> double {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        return (double)(now.tv_sec - burn_start_ts.tv_sec)
+             + (double)(now.tv_nsec - burn_start_ts.tv_nsec) / 1e9;
+    };
 
     // --- Instance ---
     VkInstance instance = create_instance();
@@ -272,13 +288,13 @@ int main(int argc, char** argv) {
     VK_CHECK(vkCreateFence(device, &fence_ci, nullptr, &fence));
 
     // --- Main burn loop ---
-    fprintf(stderr, "gpu%d: burning until deadline %lld ...\n", gpu_idx, (long long)deadline);
+    fprintf(stderr, "gpu%d: burning for %ld seconds ...\n", gpu_idx, duration_sec);
     uint64_t dispatches = 0;
 
-    while (time(nullptr) < deadline) {
+    while (elapsed_sec() < (double)duration_sec) {
         // Cycle through allocated buffers to keep all VRAM hot
         for (auto& a : allocs) {
-            if (time(nullptr) >= deadline) break;
+            if (elapsed_sec() >= (double)duration_sec) break;
 
             uint32_t elem_count = (uint32_t)(a.size / sizeof(float));
 

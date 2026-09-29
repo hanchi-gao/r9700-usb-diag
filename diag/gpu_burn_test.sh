@@ -131,11 +131,9 @@ fan_apply() {
     FAN_ORIG_ZERO["${hw}"]="$(sed -n 2p "${od}/fan_zero_rpm_enable" 2>/dev/null)"
     # Some cards (e.g. R9700) have no zero-RPM idle-stop feature at all and
     # reject this write outright (dmesg: "Zero RPM setting not supported!").
-    # That's not a reason to give up on the fan curve itself — just note it
-    # and move on; there's nothing to disable on a card that lacks the feature.
-    if ! { fan_write "${od}/fan_zero_rpm_enable" 0 && fan_write "${od}/fan_zero_rpm_enable" c; }; then
-      warn "GPU fan: could not disable zero-RPM mode (card may not support it) — continuing anyway"
-    fi
+    # Expected on those cards, not worth a log line — just move on; the fan
+    # curve itself still gets applied below.
+    fan_write "${od}/fan_zero_rpm_enable" 0 && fan_write "${od}/fan_zero_rpm_enable" c || true
   fi
   for i in "${!FAN_TEMP_POINTS[@]}"; do
     if ! fan_write "${od}/fan_curve" "${i} ${FAN_TEMP_POINTS[$i]} ${pct}"; then
@@ -341,13 +339,12 @@ if [[ ${PRE_FAIL_COUNT} -gt 0 ]]; then
 fi
 
 # ─── wait for clock sync (only if this machine has a network at all) ────────
-# A wrong RTC/system clock at boot (auto-run can fire before NTP corrects it)
-# would bake a bogus far-future DEADLINE below, and the loop's "elapsed"
-# check would then never trip until real time actually reaches that bogus
-# date — the test would appear to hang for months. Wait (bounded) for NTP
-# sync first so DEADLINE is computed from a trustworthy clock. Skip entirely
-# on network-less deployments — with no network the clock can't be corrected
-# mid-test anyway, so there's nothing to wait for and no bug to guard against.
+# The actual burn duration no longer depends on wall-clock time at all (see
+# the monotonic-clock note below and in src/vk_burn.cpp) — a wrong/jumping
+# RTC can't turn this into a multi-day hang anymore. This wait is now purely
+# so log/CSV timestamps aren't stamped with a nonsense date if NTP hasn't
+# caught up yet. Skip entirely on network-less deployments — with no network
+# the clock can't be corrected at all, so there's nothing to wait for.
 if ip route get 1.1.1.1 &>/dev/null; then
   CLOCK_WAIT=0
   while [[ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" != "yes" ]]; do
@@ -362,15 +359,22 @@ if ip route get 1.1.1.1 &>/dev/null; then
 fi
 
 # ─── launch vk_burn (all GPUs simultaneously) ────────────────────────────────
+# Timed against /proc/uptime (monotonic, since boot), not wall-clock time — a
+# wall clock can jump (e.g. an unsynced RTC getting stepped by NTP mid-run),
+# and a deadline computed from `date +%s` before that jump would make this
+# loop run for however long the clock takes to "catch up" (real incident:
+# a burn that should've taken 2 minutes ran ~90 hours). vk_burn itself is
+# timed the same way internally — see src/vk_burn.cpp.
 info "=== Burn-in started ==="
-DEADLINE=$(( $(date +%s) + DURATION ))
-BURN_START_UPTIME=$(awk '{printf "%.0f\n", $1}' /proc/uptime)
+mono_now() { awk '{printf "%.0f\n", $1}' /proc/uptime; }
+BURN_START_UPTIME=$(mono_now)
+DEADLINE_UPTIME=$(( BURN_START_UPTIME + DURATION ))
 declare -a VK_PIDS=()
 declare -A GPU_ACTIVE
 
 for i in "${!VK_INDICES[@]}"; do
   idx="${VK_INDICES[$i]}"
-  "${VK_BURN}" "${DEADLINE}" 90 "${idx}" \
+  "${VK_BURN}" "${DURATION}" 90 "${idx}" \
     > "${LOG_DIR}/gpu${idx}_vkburn.log" 2>&1 &
   VK_PIDS+=("$!")
   GPU_ACTIVE["${idx}"]=1
@@ -400,14 +404,14 @@ kill_gpu() {
 }
 
 # ─── monitoring loop ─────────────────────────────────────────────────────────
-NEXT_REPORT=$(date +%s)
+NEXT_REPORT=$(mono_now)
 
-while [[ $(date +%s) -lt ${DEADLINE} ]]; do
-  NOW=$(date +%s)
+while [[ $(mono_now) -lt ${DEADLINE_UPTIME} ]]; do
+  NOW=$(mono_now)
 
   if [[ ${NOW} -ge ${NEXT_REPORT} ]]; then
     NEXT_REPORT=$(( NOW + REPORT_INTERVAL ))
-    REMAINING=$(( DEADLINE - NOW ))
+    REMAINING=$(( DEADLINE_UPTIME - NOW ))
 
     echo -e "${BOLD}  ── $(date +%T)  ${REMAINING}s remaining ──────────────────${NC}" \
       | tee -a "${MAIN_LOG}"
