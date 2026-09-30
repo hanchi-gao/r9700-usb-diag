@@ -111,6 +111,19 @@ fi
 NO_CLEAR=1 bash "${LLM_TEST}" "${LLM_ARGS[@]}"
 LLM_EC=$?
 
+# Stage 2's own output has by now scrolled Stage 1's parameters/per-GPU stats
+# off a bare tty console (no scrollback there) — replay Stage 1's recap here
+# so the operator can still see what it actually ran with and measured.
+echo ""
+echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
+echo -e "${BOLD}  STAGE 1 RECAP (scrolled off above — repeated here)${NC}"
+echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
+if [[ -f "${SCRIPT_DIR}/../logs/.last_run_summary.txt" ]]; then
+  cat "${SCRIPT_DIR}/../logs/.last_run_summary.txt"
+else
+  echo "  (summary file not found)"
+fi
+
 echo ""
 echo -e "${BOLD}════════════════════════════════════════════════════${NC}"
 if [[ "${LLM_EC}" -eq 0 ]]; then

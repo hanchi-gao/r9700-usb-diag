@@ -385,10 +385,16 @@ echo ""
 # ─── per-GPU tracking ────────────────────────────────────────────────────────
 declare -A FAIL_REASONS
 declare -A MAX_JUNC
+declare -A MIN_JUNC
+declare -A SUM_JUNC
+declare -A SAMPLE_COUNT
 declare -A MAX_POWER
 declare -A FAN_WARNED=()
 for idx in "${VK_INDICES[@]}"; do
   MAX_JUNC["${idx}"]=0
+  MIN_JUNC["${idx}"]=""
+  SUM_JUNC["${idx}"]=0
+  SAMPLE_COUNT["${idx}"]=0
   MAX_POWER["${idx}"]=0
 done
 
@@ -432,6 +438,9 @@ while [[ $(mono_now) -lt ${DEADLINE_UPTIME} ]]; do
       vram=$(read_vram  "${bdf}")
 
       [[ "${junc}"  -gt "${MAX_JUNC[$idx]}"  ]] && MAX_JUNC["${idx}"]="${junc}"
+      [[ -z "${MIN_JUNC[$idx]}" || "${junc}" -lt "${MIN_JUNC[$idx]}" ]] && MIN_JUNC["${idx}"]="${junc}"
+      SUM_JUNC["${idx}"]=$(( SUM_JUNC["${idx}"] + junc ))
+      SAMPLE_COUNT["${idx}"]=$(( SAMPLE_COUNT["${idx}"] + 1 ))
       [[ "${pwr}"   -gt "${MAX_POWER[$idx]}" ]] && MAX_POWER["${idx}"]="${pwr}"
 
       if [[ "${junc}" -ge "${TEMP_FAIL_C}" ]]; then
@@ -513,6 +522,11 @@ echo -e "${BOLD}═════════════════════�
 echo ""
 
 PASS_COUNT=0; FAIL_COUNT=0
+RECAP=""  # plain-text (no color codes) copy of the per-GPU results below,
+          # written to a fixed path at the end so run_all.sh can show it
+          # again in its own final summary — Stage 1's numbers would
+          # otherwise scroll off a bare tty console once Stage 2 prints
+          # its own output on top of it.
 
 for i in "${!VK_INDICES[@]}"; do
   idx="${VK_INDICES[$i]}"
@@ -521,23 +535,30 @@ for i in "${!VK_INDICES[@]}"; do
   vgb="${GPU_VRAM_GB[$idx]:-?}"
   pcie="${GPU_PCIE[$idx]:-?}"
   max_j="${MAX_JUNC[$idx]:-0}"
+  min_j="${MIN_JUNC[$idx]:-${max_j}}"
+  avg_j="${max_j}"
+  [[ "${SAMPLE_COUNT[$idx]:-0}" -gt 0 ]] && avg_j=$(( SUM_JUNC["${idx}"] / SAMPLE_COUNT["${idx}"] ))
   max_p="${MAX_POWER[$idx]:-0}"
   reason="${FAIL_REASONS[${idx}]:-}"
 
   if [[ -n "${reason}" ]]; then
     echo -e "  GPU ${idx}  [${name}]  [${bdf}]  ${RED}${BOLD}FAIL${NC}" | tee -a "${MAIN_LOG}"
     echo -e "           Reason  : ${reason}"                  | tee -a "${MAIN_LOG}"
-    echo -e "           Max temp: ${max_j}°C  Max power: ${max_p}W" | tee -a "${MAIN_LOG}"
+    echo -e "           Junc temp — min:${min_j}°C avg:${avg_j}°C max:${max_j}°C   Max power: ${max_p}W" | tee -a "${MAIN_LOG}"
     echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},\"${name}\",${bdf},${vgb},${pcie},${max_j},${max_p},FAIL,${reason},${LOG_DIR}" \
       >> "${RESULTS_CSV}"
     FAIL_COUNT=$(( FAIL_COUNT + 1 ))
+    RECAP+="GPU ${idx} [${name}] [${bdf}]: FAIL — ${reason}"$'\n'
+    RECAP+="  Junc temp - min:${min_j}C avg:${avg_j}C max:${max_j}C   Max power: ${max_p}W"$'\n'
   else
     echo -e "  GPU ${idx}  [${name}]  [${bdf}]  ${GREEN}${BOLD}PASS${NC}" | tee -a "${MAIN_LOG}"
-    echo -e "           Max junc: ${max_j}°C  Max power: ${max_p}W  VRAM: ${vgb}GB  PCIe: ${pcie}" \
+    echo -e "           Junc temp — min:${min_j}°C avg:${avg_j}°C max:${max_j}°C   Max power: ${max_p}W  VRAM: ${vgb}GB  PCIe: ${pcie}" \
       | tee -a "${MAIN_LOG}"
     echo "$(date '+%Y-%m-%d %H:%M:%S'),${SERIAL},${idx},\"${name}\",${bdf},${vgb},${pcie},${max_j},${max_p},PASS,,${LOG_DIR}" \
       >> "${RESULTS_CSV}"
     PASS_COUNT=$(( PASS_COUNT + 1 ))
+    RECAP+="GPU ${idx} [${name}] [${bdf}]: PASS"$'\n'
+    RECAP+="  Junc temp - min:${min_j}C avg:${avg_j}C max:${max_j}C   Max power: ${max_p}W  VRAM: ${vgb}GB  PCIe: ${pcie}"$'\n'
   fi
   echo ""
 done
@@ -579,5 +600,18 @@ echo -e "${BOLD}  ── Result location ─────────────
 echo -e "  Log  : ${CYAN}${LOG_DIR}${NC}"
 echo -e "${BOLD}  ──────────────────────────────────────────────────${NC}"
 echo ""
+
+# ─── recap file for run_all.sh ────────────────────────────────────────────────
+# Fixed path (always overwritten), no color codes: run_all.sh cats this back
+# out in its own final summary after Stage 2 finishes, so Stage 1's
+# parameters and per-GPU stats are still visible even though Stage 2's own
+# output has since scrolled them off a bare tty console with no scrollback.
+{
+  echo "Stage 1 (gpu_burn_test.sh) — Serial: ${SERIAL}  Duration: ${DURATION}s  Fan: ${FAN_PCT:-automatic}"
+  echo "Thresholds — WARN >=${TEMP_WARN_C}C  FAIL >=${TEMP_FAIL_C}C (junction)"
+  echo "${RECAP}"
+  echo "Total: ${GPU_COUNT} GPU(s) | ${PASS_COUNT} PASS | ${FAIL_COUNT} FAIL"
+  echo "Log: ${LOG_DIR}"
+} > "${USB_ROOT}/logs/.last_run_summary.txt" 2>/dev/null
 
 [[ "${FAIL_COUNT}" -gt 0 ]] && exit 1 || exit 0
